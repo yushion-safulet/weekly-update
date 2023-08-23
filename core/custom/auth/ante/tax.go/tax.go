@@ -3,15 +3,14 @@ package ante
 import (
 	"fmt"
 
+	"github.com/CosmWasm/wasmd/x/wasm"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 	authz "github.com/cosmos/cosmos-sdk/x/authz"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 
-	core "github.com/classic-terra/core/v2/types"
 	marketexported "github.com/classic-terra/core/v2/x/market/exported"
 	oracleexported "github.com/classic-terra/core/v2/x/oracle/exported"
-	wasmexported "github.com/classic-terra/core/v2/x/wasm/exported"
 )
 
 // MaxOracleMsgGasUsage is constant expected oracle msg gas cost
@@ -53,14 +52,14 @@ func (tfd TaxFeeDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool,
 		// Mempool fee validation
 		// No fee validation for oracle txs
 		if ctx.IsCheckTx() &&
-			!(isOracleTx(ctx, msgs) && gas <= uint64(len(msgs))*MaxOracleMsgGasUsage) {
+			!(isOracleTx(msgs) && gas <= uint64(len(msgs))*MaxOracleMsgGasUsage) {
 			if err := EnsureSufficientMempoolFees(ctx, gas, feeCoins, taxes); err != nil {
 				return ctx, sdkerrors.Wrapf(sdkerrors.ErrInsufficientFee, err.Error())
 			}
 		}
 
 		// Ensure paid fee is enough to cover taxes
-		if _, hasNeg := feeCoins.SafeSub(taxes); hasNeg {
+		if _, hasNeg := feeCoins.SafeSub(taxes...); hasNeg {
 			return ctx, sdkerrors.Wrapf(sdkerrors.ErrInsufficientFee, "insufficient fees; got: %s required: %s", feeCoins, taxes)
 		}
 
@@ -96,7 +95,7 @@ func EnsureSufficientMempoolFees(ctx sdk.Context, gas uint64, feeCoins sdk.Coins
 
 	// Before checking gas prices, remove taxed from fee
 	var hasNeg bool
-	if feeCoins, hasNeg = feeCoins.SafeSub(taxes); hasNeg {
+	if feeCoins, hasNeg = feeCoins.SafeSub(taxes...); hasNeg {
 		return fmt.Errorf("insufficient fees; got: %q, required: %q = %q(gas) +%q(stability)", feeCoins.Add(taxes...), requiredFees.Add(taxes...), requiredFees, taxes)
 	}
 
@@ -142,11 +141,16 @@ func FilterMsgAndComputeTax(ctx sdk.Context, tk TreasuryKeeper, msgs ...sdk.Msg)
 		case *marketexported.MsgSwapSend:
 			taxes = taxes.Add(computeTax(ctx, tk, sdk.NewCoins(msg.OfferCoin))...)
 
-		case *wasmexported.MsgInstantiateContract:
-			taxes = taxes.Add(computeTax(ctx, tk, msg.InitCoins)...)
+		case *wasm.MsgInstantiateContract:
+			taxes = taxes.Add(computeTax(ctx, tk, msg.Funds)...)
 
-		case *wasmexported.MsgExecuteContract:
-			taxes = taxes.Add(computeTax(ctx, tk, msg.Coins)...)
+		case *wasm.MsgInstantiateContract2:
+			taxes = taxes.Add(computeTax(ctx, tk, msg.Funds)...)
+
+		case *wasm.MsgExecuteContract:
+			if !tk.HasBurnTaxExemptionContract(ctx, msg.Contract) {
+				taxes = taxes.Add(computeTax(ctx, tk, msg.Funds)...)
+			}
 
 		case *authz.MsgExec:
 			messages, err := msg.GetMessages()
@@ -163,18 +167,14 @@ func FilterMsgAndComputeTax(ctx sdk.Context, tk TreasuryKeeper, msgs ...sdk.Msg)
 
 // computes the stability tax according to tax-rate and tax-cap
 func computeTax(ctx sdk.Context, tk TreasuryKeeper, principal sdk.Coins) sdk.Coins {
-	currHeight := ctx.BlockHeight()
 	taxRate := tk.GetTaxRate(ctx)
 	if taxRate.Equal(sdk.ZeroDec()) {
 		return sdk.Coins{}
 	}
 
 	taxes := sdk.Coins{}
+
 	for _, coin := range principal {
-		// Originally only a stability tax on UST.  Changed to tax Luna as well after TaxPowerUpgradeHeight
-		if (coin.Denom == core.MicroLunaDenom || coin.Denom == sdk.DefaultBondDenom) && currHeight < TaxPowerUpgradeHeight {
-			continue
-		}
 		if coin.Denom == sdk.DefaultBondDenom {
 			continue
 		}
@@ -197,7 +197,7 @@ func computeTax(ctx sdk.Context, tk TreasuryKeeper, principal sdk.Coins) sdk.Coi
 	return taxes
 }
 
-func isOracleTx(ctx sdk.Context, msgs []sdk.Msg) bool {
+func isOracleTx(msgs []sdk.Msg) bool {
 	for _, msg := range msgs {
 		switch msg.(type) {
 		case *oracleexported.MsgAggregateExchangeRatePrevote:
