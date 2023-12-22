@@ -14,11 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with Polkadot.  If not, see <http://www.gnu.org/licenses/>.
 
-//! Helper functions for tests, also used in runtime-benchmarks.
-
-#![cfg(test)]
-
-use super::*;
+//! Helper functions for tests
 
 use crate::{
 	mock::MockGenesisConfig,
@@ -26,6 +22,7 @@ use crate::{
 };
 
 use primitives::{Balance, HeadData, ValidationCode};
+use sp_runtime::Perbill;
 
 fn default_genesis_config() -> MockGenesisConfig {
 	MockGenesisConfig {
@@ -43,7 +40,7 @@ pub struct GenesisConfigBuilder {
 	pub on_demand_fee_variability: Perbill,
 	pub on_demand_max_queue_size: u32,
 	pub on_demand_target_queue_utilization: Perbill,
-	pub onboarded_on_demand_chains: Vec<ParaId>,
+	pub onboarded_on_demand_chains: Vec<primitives::Id>,
 }
 
 impl Default for GenesisConfigBuilder {
